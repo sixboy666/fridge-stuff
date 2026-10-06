@@ -929,12 +929,17 @@ window.addEventListener('keydown', e=>{
 });
 
 const titleEl=document.getElementById('title');
-titleEl.addEventListener('pointerdown', ()=>{
+let started=false;
+function startGame(){
+  if (started) return;
+  started=true;
   Audio2.init();
   Audio2.tap();
   titleEl.style.display='none';
   setState('PLAY');
-});
+}
+titleEl.addEventListener('pointerdown', startGame);
+titleEl.addEventListener('click', startGame);
 document.querySelectorAll('#scenes button').forEach(b=>{
   b.addEventListener('pointerdown', e=>{
     e.stopPropagation();

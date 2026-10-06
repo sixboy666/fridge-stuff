@@ -67,7 +67,7 @@
 
 <script>
 'use strict';
-const BUILD = 'v7-pindrive';
+const BUILD = 'v8-aniso';
 /* ============================================================
    STUFF HIM IN THE FRIDGE
    Single-file soft-body meme physics. Verlet blob man with
@@ -279,9 +279,37 @@ function physics(dt) {
     }
   }
 
+  // ---- two-pin anisotropic squash: spread apart => compress perpendicular ----
+  const pg = [...pointers.values()];
+  if (pg.length >= 2) {
+    // choose pin pair with the greatest rest-space separation
+    let best = null;
+    for (let i = 0; i < pg.length; i++) for (let j = i + 1; j < pg.length; j++) {
+      const a = points[pg[i].idx], b = points[pg[j].idx];
+      const rd = Math.hypot(a.ox - b.ox, a.oy - b.oy) || 1;
+      if (!best || rd > best.rd) best = { a, b, rd };
+    }
+    const wd = Math.hypot(best.a.x - best.b.x, best.a.y - best.b.y) || 1;
+    const spread = wd / best.rd;
+    if (Math.abs(spread - 1) > 0.02) {
+      const sPerp = Math.max(0.45, Math.min(1.6, 1 / Math.sqrt(spread)));
+      let ux = (best.b.x - best.a.x) / wd, uy = (best.b.y - best.a.y) / wd;
+      const cc = centroid();
+      for (const p of points) {
+        if (p.pinned) continue;
+        const rx = p.x - cc.x, ry = p.y - cc.y;
+        const along = rx * ux + ry * uy;
+        const ax2 = along * ux, ay2 = along * uy;
+        const qx = rx - ax2, qy = ry - ay2;
+        p.x = cc.x + ax2 + qx * sPerp;
+        p.y = cc.y + ay2 + qy * sPerp;
+      }
+    }
+  }
+
   // ---- bounded area conservation (single stable pass) ----
   const aR = Math.abs(polygonArea(true)) / restArea;
-  let f = (1 - aR) * 0.4;
+  let f = (1 - aR) * 0.25;
   if (f > 0.3) f = 0.3; if (f < -0.3) f = -0.3;
   if (Math.abs(f) > 0.0005) {
     const cc = centroid();

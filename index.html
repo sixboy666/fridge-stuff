@@ -217,7 +217,7 @@ buildMan();
 const GRAV = 1500;
 const ITER = 8;
 const EDGE_K = 0.85;
-const PRESS_K = 0.075;
+const PRESS_K = 0.4;
 const SHAPE_K = 0.014;
 const DAMP = 0.985;
 const PR = 7;
@@ -255,7 +255,7 @@ function physics(dt) {
       const nl = Math.hypot(nx, ny) || 1;
       nx /= nl; ny /= nl;
       let push = PRESS_K * ratio * Math.hypot(dx, dy) * 0.5;
-      push = Math.max(-4, Math.min(4, push));
+      push = Math.max(-3.5, Math.min(3.5, push));
       if (!p.pinned) { p.x += nx * push * 0.5; p.y += ny * push * 0.5; }
       if (!q.pinned) { q.x += nx * push * 0.5; q.y += ny * push * 0.5; }
     }

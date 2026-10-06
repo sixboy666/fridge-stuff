@@ -67,7 +67,7 @@
 
 <script>
 'use strict';
-const BUILD = 'force-v5';
+const BUILD = 'radial-v6';
 /* ============================================================
    STUFF HIM IN THE FRIDGE
    Single-file soft-body meme physics. Verlet blob man with
@@ -218,43 +218,22 @@ buildMan();
 const GRAV = 1500;
 const ITER = 8;
 const EDGE_K = 0.85;
-const PRESS_K = 9000;   // force-based pressure coefficient
-const PRESS_CLAMP = 220;
+const AREA_K = 0.12;   // radial area-conservation strength
 const SHAPE_K = 0.014;
 const DAMP = 0.985;
 const PR = 7;
-const fax = new Array(N), fay = new Array(N);
 
 function physics(dt) {
   const dt2 = dt * dt;
 
-  // ---- forces: gravity + pressure (area conservation) ----
-  const sArea = polygonArea(true);
-  const area = Math.abs(sArea);
-  const sign = sArea < 0 ? -1 : 1;
-  const Pv = Math.max(-PRESS_CLAMP, Math.min(PRESS_CLAMP,
-              PRESS_K * (restArea - area) / restArea));
-  for (let i = 0; i < N; i++) { fax[i] = 0; fay[i] = GRAV; }
-  for (let i = 0; i < N; i++) {
-    const p = points[i], q = points[(i + 1) % N];
-    const dx = q.x - p.x, dy = q.y - p.y;
-    let nx = dy * sign, ny = -dx * sign;
-    const nl = Math.hypot(nx, ny) || 1;
-    nx /= nl; ny /= nl;
-    const F = Pv * Math.hypot(dx, dy) * 0.5;
-    fax[i] += nx * F; fay[i] += ny * F;
-    fax[(i + 1) % N] += nx * F; fay[(i + 1) % N] += ny * F;
-  }
-
-  // ---- verlet integrate ----
-  for (let i = 0; i < N; i++) {
-    const p = points[i];
+  // ---- verlet integrate (gravity) ----
+  for (const p of points) {
     if (p.pinned) continue;
     const vx = (p.x - p.px) * DAMP;
     const vy = (p.y - p.py) * DAMP;
     p.px = p.x; p.py = p.y;
-    p.x += vx + fax[i] * dt2;
-    p.y += vy + fay[i] * dt2;
+    p.x += vx;
+    p.y += vy + GRAV * dt2;
   }
 
   // ---- position constraints ----
@@ -269,11 +248,20 @@ function physics(dt) {
       if (!p.pinned) { p.x += mx; p.y += my; }
       if (!q.pinned) { q.x -= mx; q.y -= my; }
     }
+    // radial area conservation: scale unpinned points about centroid
+    const aR = Math.abs(polygonArea(true)) / restArea;
+    let kk = AREA_K * (1 - aR);
+    if (kk > 0.05) kk = 0.05; if (kk < -0.05) kk = -0.05;
     for (const p of points) {
       if (p.pinned) continue;
-      const tx = c.x + p.ox, ty = c.y + p.oy;
-      p.x += (tx - p.x) * SHAPE_K;
-      p.y += (ty - p.y) * SHAPE_K;
+      p.x += (p.x - c.x) * kk;
+      p.y += (p.y - c.y) * kk;
+    }
+    // shape recovery
+    for (const p of points) {
+      if (p.pinned) continue;
+      p.x += (c.x + p.ox - p.x) * SHAPE_K;
+      p.y += (c.y + p.oy - p.y) * SHAPE_K;
     }
   }
 

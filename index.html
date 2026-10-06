@@ -67,7 +67,7 @@
 
 <script>
 'use strict';
-const BUILD = 'radial-v6';
+const BUILD = 'v7-pindrive';
 /* ============================================================
    STUFF HIM IN THE FRIDGE
    Single-file soft-body meme physics. Verlet blob man with
@@ -216,15 +216,39 @@ buildMan();
 
 // ---------- Physics constants ----------
 const GRAV = 1500;
-const ITER = 8;
+const ITER = 4;
 const EDGE_K = 0.85;
-const AREA_K = 0.12;   // radial area-conservation strength
-const SHAPE_K = 0.014;
+const FALLOFF = 135;         // pin influence reach (rest-space units)
+const SHAPE_K = 0.006;
 const DAMP = 0.985;
 const PR = 7;
 
 function physics(dt) {
   const dt2 = dt * dt;
+  const c = centroid();
+
+  // ---- pin-driven soft deformation (falloff through the body) ----
+  const infs = [];
+  for (const g of pointers.values()) {
+    const p = points[g.idx];
+    infs.push({ ox: p.ox, oy: p.oy,
+                dx: p.x - (c.x + p.ox), dy: p.y - (c.y + p.oy) });
+  }
+  if (infs.length) {
+    const inv2f = 1 / (2 * FALLOFF * FALLOFF);
+    for (const p of points) {
+      if (p.pinned) continue;
+      let Dx = 0, Dy = 0;
+      for (const inf of infs) {
+        const ddx = p.ox - inf.ox, ddy = p.oy - inf.oy;
+        const w = Math.exp(-(ddx * ddx + ddy * ddy) * inv2f);
+        Dx += inf.dx * w; Dy += inf.dy * w;
+      }
+      const tx = c.x + p.ox + Dx, ty = c.y + p.oy + Dy;
+      p.x += (tx - p.x) * 0.45;
+      p.y += (ty - p.y) * 0.45;
+    }
+  }
 
   // ---- verlet integrate (gravity) ----
   for (const p of points) {
@@ -236,9 +260,9 @@ function physics(dt) {
     p.y += vy + GRAV * dt2;
   }
 
-  // ---- position constraints ----
+  // ---- position constraints: edges + shape recovery ----
   for (let it = 0; it < ITER; it++) {
-    const c = centroid();
+    const cc = centroid();
     for (const e of edges) {
       const p = points[e.a], q = points[e.b];
       let dx = q.x - p.x, dy = q.y - p.y;
@@ -248,20 +272,23 @@ function physics(dt) {
       if (!p.pinned) { p.x += mx; p.y += my; }
       if (!q.pinned) { q.x -= mx; q.y -= my; }
     }
-    // radial area conservation: scale unpinned points about centroid
-    const aR = Math.abs(polygonArea(true)) / restArea;
-    let kk = AREA_K * (1 - aR);
-    if (kk > 0.05) kk = 0.05; if (kk < -0.05) kk = -0.05;
     for (const p of points) {
       if (p.pinned) continue;
-      p.x += (p.x - c.x) * kk;
-      p.y += (p.y - c.y) * kk;
+      p.x += (cc.x + p.ox - p.x) * SHAPE_K;
+      p.y += (cc.y + p.oy - p.y) * SHAPE_K;
     }
-    // shape recovery
+  }
+
+  // ---- bounded area conservation (single stable pass) ----
+  const aR = Math.abs(polygonArea(true)) / restArea;
+  let f = (1 - aR) * 0.4;
+  if (f > 0.3) f = 0.3; if (f < -0.3) f = -0.3;
+  if (Math.abs(f) > 0.0005) {
+    const cc = centroid();
     for (const p of points) {
       if (p.pinned) continue;
-      p.x += (c.x + p.ox - p.x) * SHAPE_K;
-      p.y += (c.y + p.oy - p.y) * SHAPE_K;
+      p.x = cc.x + (p.x - cc.x) * (1 + f);
+      p.y = cc.y + (p.y - cc.y) * (1 + f);
     }
   }
 

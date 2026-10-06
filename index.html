@@ -67,7 +67,7 @@
 
 <script>
 'use strict';
-const BUILD = 'v9-ghost';
+const BUILD = 'v10-center';
 /* ============================================================
    STUFF HIM IN THE FRIDGE
    Single-file soft-body meme physics. Verlet blob man with
@@ -203,12 +203,14 @@ function centroid() {
   for (const p of points) { x += p.x; y += p.y; }
   return { x: x / N, y: y / N };
 }
+let bpx = HOME.x, bpy = HOME.y;   // persistent body center
 function resetMan() {
   for (const p of points) {
     p.x = p.px = HOME.x + p.ox;
     p.y = p.py = HOME.y + p.oy;
     p.inside = false;
   }
+  bpx = HOME.x; bpy = HOME.y;
   calmTime = 0;
   setState('PLAY');
 }
@@ -244,11 +246,14 @@ function ghostCentroid() {
 function physics(dt) {
   const dt2 = dt * dt;
   const cc = centroid();
+  // body center eases toward actual centroid (anchor for rest pose)
+  bpx += (cc.x - bpx) * 0.12;
+  bpy += (cc.y - bpy) * 0.12;
 
   // ===== GHOST: build deformed rest pose from pins =====
   for (let i = 0; i < N; i++) {
-    gz[i].x = cc.x + points[i].ox;
-    gz[i].y = cc.y + points[i].oy;
+    gz[i].x = bpx + points[i].ox;
+    gz[i].y = bpy + points[i].oy;
     gz[i].pin = false;
   }
   for (const g of pointers.values()) {
@@ -319,18 +324,6 @@ function physics(dt) {
     if (p.pinned) continue;
     p.x += (gz[i].x - p.x) * FOLLOW;
     p.y += (gz[i].y - p.y) * FOLLOW;
-  }
-  // light edge smoothing on real points
-  for (let it = 0; it < PT_ITER; it++) {
-    for (const e of edges) {
-      const a = points[e.a], b = points[e.b];
-      let dx = b.x - a.x, dy = b.y - a.y;
-      const d = Math.hypot(dx, dy) || 0.0001;
-      const diff = ((d - e.len) / d) * PT_K;
-      const mx = dx * diff * 0.5, my = dy * diff * 0.5;
-      if (!a.pinned) { a.x += mx; a.y += my; }
-      if (!b.pinned) { b.x -= mx; b.y -= my; }
-    }
   }
 
   for (const p of points) {
@@ -615,7 +608,7 @@ function updateGame(dt) {
     physics(dt);
     let sp = 0;
     for (const p of points) sp += Math.hypot(p.x-p.px, p.y-p.py);
-    if (sp / N < 0.5 && stateT > 0.6) calmTime += dt; else calmTime = 0;
+    if (sp / N < 1.2 && stateT > 0.6) calmTime += dt; else calmTime = 0;
     if (calmTime > 0.9) { calmTime = 0; setState('PLAY'); }
   }
 

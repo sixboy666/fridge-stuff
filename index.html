@@ -217,25 +217,46 @@ buildMan();
 const GRAV = 1500;
 const ITER = 8;
 const EDGE_K = 0.85;
-const PRESS_K = 0.4;
+const PRESS_K = 9000;   // force-based pressure coefficient
+const PRESS_CLAMP = 220;
 const SHAPE_K = 0.014;
 const DAMP = 0.985;
 const PR = 7;
+const fax = new Array(N), fay = new Array(N);
 
 function physics(dt) {
   const dt2 = dt * dt;
-  for (const p of points) {
+
+  // ---- forces: gravity + pressure (area conservation) ----
+  const sArea = polygonArea(true);
+  const area = Math.abs(sArea);
+  const sign = sArea < 0 ? -1 : 1;
+  const Pv = Math.max(-PRESS_CLAMP, Math.min(PRESS_CLAMP,
+              PRESS_K * (restArea - area) / restArea));
+  for (let i = 0; i < N; i++) { fax[i] = 0; fay[i] = GRAV; }
+  for (let i = 0; i < N; i++) {
+    const p = points[i], q = points[(i + 1) % N];
+    const dx = q.x - p.x, dy = q.y - p.y;
+    let nx = dy * sign, ny = -dx * sign;
+    const nl = Math.hypot(nx, ny) || 1;
+    nx /= nl; ny /= nl;
+    const F = Pv * Math.hypot(dx, dy) * 0.5;
+    fax[i] += nx * F; fay[i] += ny * F;
+    fax[(i + 1) % N] += nx * F; fay[(i + 1) % N] += ny * F;
+  }
+
+  // ---- verlet integrate ----
+  for (let i = 0; i < N; i++) {
+    const p = points[i];
     if (p.pinned) continue;
     const vx = (p.x - p.px) * DAMP;
     const vy = (p.y - p.py) * DAMP;
     p.px = p.x; p.py = p.y;
-    p.x += vx;
-    p.y += vy + GRAV * dt2;
+    p.x += vx + fax[i] * dt2;
+    p.y += vy + fay[i] * dt2;
   }
 
-  const area = Math.abs(polygonArea(true));
-  const sign = polygonArea(true) < 0 ? -1 : 1;
-
+  // ---- position constraints ----
   for (let it = 0; it < ITER; it++) {
     const c = centroid();
     for (const e of edges) {
@@ -246,18 +267,6 @@ function physics(dt) {
       const mx = dx * diff * 0.5, my = dy * diff * 0.5;
       if (!p.pinned) { p.x += mx; p.y += my; }
       if (!q.pinned) { q.x -= mx; q.y -= my; }
-    }
-    const ratio = (restArea - area) / restArea;
-    for (let i = 0; i < N; i++) {
-      const p = points[i], q = points[(i + 1) % N];
-      const dx = q.x - p.x, dy = q.y - p.y;
-      let nx = dy * sign, ny = -dx * sign;
-      const nl = Math.hypot(nx, ny) || 1;
-      nx /= nl; ny /= nl;
-      let push = PRESS_K * ratio * Math.hypot(dx, dy) * 0.5;
-      push = Math.max(-3.5, Math.min(3.5, push));
-      if (!p.pinned) { p.x += nx * push * 0.5; p.y += ny * push * 0.5; }
-      if (!q.pinned) { q.x += nx * push * 0.5; q.y += ny * push * 0.5; }
     }
     for (const p of points) {
       if (p.pinned) continue;

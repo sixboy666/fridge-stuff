@@ -67,7 +67,7 @@
 
 <script>
 'use strict';
-const BUILD = 'v8-aniso';
+const BUILD = 'v9-ghost';
 /* ============================================================
    STUFF HIM IN THE FRIDGE
    Single-file soft-body meme physics. Verlet blob man with
@@ -216,73 +216,62 @@ buildMan();
 
 // ---------- Physics constants ----------
 const GRAV = 1500;
-const ITER = 4;
-const EDGE_K = 0.85;
-const FALLOFF = 135;         // pin influence reach (rest-space units)
-const SHAPE_K = 0.006;
+const GH_ITER = 6;   // ghost relaxation iterations
+const PT_ITER = 2;   // real point edge iterations
+const GH_K = 0.55;   // ghost edge stiffness (allows stretch propagation)
+const PT_K = 0.6;
 const DAMP = 0.985;
+const FOLLOW = 0.28; // spring-follow toward ghost
 const PR = 7;
+
+// ghost deformation mesh
+const gz = [];
+for (let i = 0; i < N; i++) gz.push({ x:0, y:0, pin:false });
+function ghostArea() {
+  let a = 0;
+  for (let i = 0; i < N; i++) {
+    const p = gz[i], q = gz[(i + 1) % N];
+    a += p.x * q.y - q.x * p.y;
+  }
+  return a * 0.5;
+}
+function ghostCentroid() {
+  let x = 0, y = 0;
+  for (const p of gz) { x += p.x; y += p.y; }
+  return { x: x / N, y: y / N };
+}
 
 function physics(dt) {
   const dt2 = dt * dt;
-  const c = centroid();
+  const cc = centroid();
 
-  // ---- pin-driven soft deformation (falloff through the body) ----
-  const infs = [];
+  // ===== GHOST: build deformed rest pose from pins =====
+  for (let i = 0; i < N; i++) {
+    gz[i].x = cc.x + points[i].ox;
+    gz[i].y = cc.y + points[i].oy;
+    gz[i].pin = false;
+  }
   for (const g of pointers.values()) {
-    const p = points[g.idx];
-    infs.push({ ox: p.ox, oy: p.oy,
-                dx: p.x - (c.x + p.ox), dy: p.y - (c.y + p.oy) });
+    const p = points[g.idx], q = gz[g.idx];
+    q.pin = true; q.x = p.x; q.y = p.y;
   }
-  if (infs.length) {
-    const inv2f = 1 / (2 * FALLOFF * FALLOFF);
-    for (const p of points) {
-      if (p.pinned) continue;
-      let Dx = 0, Dy = 0;
-      for (const inf of infs) {
-        const ddx = p.ox - inf.ox, ddy = p.oy - inf.oy;
-        const w = Math.exp(-(ddx * ddx + ddy * ddy) * inv2f);
-        Dx += inf.dx * w; Dy += inf.dy * w;
-      }
-      const tx = c.x + p.ox + Dx, ty = c.y + p.oy + Dy;
-      p.x += (tx - p.x) * 0.45;
-      p.y += (ty - p.y) * 0.45;
-    }
-  }
-
-  // ---- verlet integrate (gravity) ----
-  for (const p of points) {
-    if (p.pinned) continue;
-    const vx = (p.x - p.px) * DAMP;
-    const vy = (p.y - p.py) * DAMP;
-    p.px = p.x; p.py = p.y;
-    p.x += vx;
-    p.y += vy + GRAV * dt2;
-  }
-
-  // ---- position constraints: edges + shape recovery ----
-  for (let it = 0; it < ITER; it++) {
-    const cc = centroid();
+  // edge relaxation (pins infinite mass)
+  for (let it = 0; it < GH_ITER; it++) {
     for (const e of edges) {
-      const p = points[e.a], q = points[e.b];
-      let dx = q.x - p.x, dy = q.y - p.y;
+      const a = gz[e.a], b = gz[e.b];
+      let dx = b.x - a.x, dy = b.y - a.y;
       const d = Math.hypot(dx, dy) || 0.0001;
-      const diff = ((d - e.len) / d) * EDGE_K;
+      const diff = ((d - e.len) / d) * GH_K;
       const mx = dx * diff * 0.5, my = dy * diff * 0.5;
-      if (!p.pinned) { p.x += mx; p.y += my; }
-      if (!q.pinned) { q.x -= mx; q.y -= my; }
-    }
-    for (const p of points) {
-      if (p.pinned) continue;
-      p.x += (cc.x + p.ox - p.x) * SHAPE_K;
-      p.y += (cc.y + p.oy - p.y) * SHAPE_K;
+      if (!a.pin) { a.x += mx; a.y += my; }
+      if (!b.pin) { b.x -= mx; b.y -= my; }
     }
   }
 
-  // ---- two-pin anisotropic squash: spread apart => compress perpendicular ----
+  const gc = ghostCentroid();
+  // anisotropic two-pin squash on ghost
   const pg = [...pointers.values()];
   if (pg.length >= 2) {
-    // choose pin pair with the greatest rest-space separation
     let best = null;
     for (let i = 0; i < pg.length; i++) for (let j = i + 1; j < pg.length; j++) {
       const a = points[pg[i].idx], b = points[pg[j].idx];
@@ -292,31 +281,55 @@ function physics(dt) {
     const wd = Math.hypot(best.a.x - best.b.x, best.a.y - best.b.y) || 1;
     const spread = wd / best.rd;
     if (Math.abs(spread - 1) > 0.02) {
-      const sPerp = Math.max(0.45, Math.min(1.6, 1 / Math.sqrt(spread)));
-      let ux = (best.b.x - best.a.x) / wd, uy = (best.b.y - best.a.y) / wd;
-      const cc = centroid();
-      for (const p of points) {
-        if (p.pinned) continue;
-        const rx = p.x - cc.x, ry = p.y - cc.y;
+      const sPerp = Math.max(0.4, Math.min(1.7, 1 / Math.sqrt(spread)));
+      const ux = (best.b.x - best.a.x) / wd, uy = (best.b.y - best.a.y) / wd;
+      for (const p of gz) {
+        if (p.pin) continue;
+        const rx = p.x - gc.x, ry = p.y - gc.y;
         const along = rx * ux + ry * uy;
         const ax2 = along * ux, ay2 = along * uy;
-        const qx = rx - ax2, qy = ry - ay2;
-        p.x = cc.x + ax2 + qx * sPerp;
-        p.y = cc.y + ay2 + qy * sPerp;
+        p.x = gc.x + ax2 + (rx - ax2) * sPerp;
+        p.y = gc.y + ay2 + (ry - ay2) * sPerp;
       }
     }
   }
+  // area conservation on ghost
+  const gaR = ghostArea() / restArea;
+  let gf = (1 - gaR) * 0.5;
+  if (gf > 0.18) gf = 0.18; if (gf < -0.18) gf = -0.18;
+  if (Math.abs(gf) > 0.0005) {
+    for (const p of gz) {
+      if (p.pin) continue;
+      p.x = gc.x + (p.x - gc.x) * (1 + gf);
+      p.y = gc.y + (p.y - gc.y) * (1 + gf);
+    }
+  }
 
-  // ---- bounded area conservation (single stable pass) ----
-  const aR = Math.abs(polygonArea(true)) / restArea;
-  let f = (1 - aR) * 0.25;
-  if (f > 0.3) f = 0.3; if (f < -0.3) f = -0.3;
-  if (Math.abs(f) > 0.0005) {
-    const cc = centroid();
-    for (const p of points) {
-      if (p.pinned) continue;
-      p.x = cc.x + (p.x - cc.x) * (1 + f);
-      p.y = cc.y + (p.y - cc.y) * (1 + f);
+  // ===== REAL POINTS: verlet gravity + spring follow ghost =====
+  for (const p of points) {
+    if (p.pinned) continue;
+    const vx = (p.x - p.px) * DAMP;
+    const vy = (p.y - p.py) * DAMP;
+    p.px = p.x; p.py = p.y;
+    p.x += vx;
+    p.y += vy + GRAV * dt2;
+  }
+  for (let i = 0; i < N; i++) {
+    const p = points[i];
+    if (p.pinned) continue;
+    p.x += (gz[i].x - p.x) * FOLLOW;
+    p.y += (gz[i].y - p.y) * FOLLOW;
+  }
+  // light edge smoothing on real points
+  for (let it = 0; it < PT_ITER; it++) {
+    for (const e of edges) {
+      const a = points[e.a], b = points[e.b];
+      let dx = b.x - a.x, dy = b.y - a.y;
+      const d = Math.hypot(dx, dy) || 0.0001;
+      const diff = ((d - e.len) / d) * PT_K;
+      const mx = dx * diff * 0.5, my = dy * diff * 0.5;
+      if (!a.pinned) { a.x += mx; a.y += my; }
+      if (!b.pinned) { b.x -= mx; b.y -= my; }
     }
   }
 
